@@ -1,0 +1,22 @@
+version: '3.8'
+x-project-name: news-bot
+
+services:
+  news_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile_offline
+    image: news_bot:latest
+    container_name: news_bot
+    env_file:
+      - .env
+    deploy:
+      restart_policy:
+        condition: any
+        delay: 30s
+        window: 60s
+    volumes:
+      - telegram_session:/data
+
+volumes:
+  telegram_session:

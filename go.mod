@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/gotd/td v0.142.0
+	go.uber.org/zap v1.27.1
 	golang.org/x/net v0.52.0
 	maunium.net/go/mautrix v0.26.4
 )
@@ -41,7 +42,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
 	golang.org/x/mod v0.34.0 // indirect

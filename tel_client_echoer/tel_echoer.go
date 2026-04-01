@@ -7,6 +7,7 @@ import (
 	"news_bot/lib"
 	"news_bot/matrix_bot"
 	"news_bot/system"
+	"os"
 	"slices"
 	"time"
 
@@ -62,16 +63,16 @@ func (t *tellClientEchoer) Start() {
 			log.Fatal("only socks5/socks5h supported", zap.String("scheme", parsed.Scheme))
 		}
 
-		var auth *proxy.Auth
+		var proxyAuth *proxy.Auth
 		if parsed.User != nil {
 			pw, _ := parsed.User.Password()
-			auth = &proxy.Auth{
+			proxyAuth = &proxy.Auth{
 				User:     parsed.User.Username(),
 				Password: pw,
 			}
 		}
 
-		dialer, err := proxy.SOCKS5("tcp", parsed.Host, auth, proxy.Direct)
+		dialer, err := proxy.SOCKS5("tcp", parsed.Host, proxyAuth, proxy.Direct)
 		if err != nil {
 			log.Fatal("failed to create SOCKS5 dialer", zap.Error(err))
 		}
@@ -89,8 +90,13 @@ func (t *tellClientEchoer) Start() {
 		Logger:  log.Named("gaps"),
 	})
 
+	dataDir := "./data"
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatal("Failed to create data directory", zap.Error(err))
+	}
+
 	sessionStorage := &session.FileStorage{
-		Path: "telegram_session.json",
+		Path: "./data/telegram_session.json",
 	}
 
 	client := telegram.NewClient(t.config.ApiCode, t.config.ApiHash, telegram.Options{
@@ -106,7 +112,6 @@ func (t *tellClientEchoer) Start() {
 		if !ok || msg.Message == "" {
 			return nil
 		}
-		fmt.Println(msg)
 
 		if peerCh, ok := msg.PeerID.(*tg.PeerChannel); ok {
 			if len(t.tellChannelIds) == 0 || slices.Contains(t.tellChannelIds, peerCh.ChannelID) {
@@ -117,9 +122,6 @@ func (t *tellClientEchoer) Start() {
 	})
 
 	authenticator := auth.Constant(t.config.PhoneNumber, t.config.Password, auth.CodeAuthenticatorFunc(t.matrixReader.ReadCode))
-
-	// Better outer loop with backoff + persistent session (highly recommended)
-	//sessionStorage := &telegram.FileSessionStorage{Path: "telegram_session.json"} // creates persistent session
 
 	ctx := context.Background()
 

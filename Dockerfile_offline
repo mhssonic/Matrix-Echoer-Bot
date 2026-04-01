@@ -1,0 +1,20 @@
+# Dockerfile_equipment_manager
+# syntax=docker/dockerfile:1
+FROM golang:1.25-alpine AS builder
+WORKDIR /app
+
+COPY go.mod go.sum ./
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -mod=vendor -o /app/newsbot ./
+
+# Final stage
+FROM alpine:3.20
+#RUN apk add --no-cache tzdata
+COPY --from=builder /app/newsbot /
+
+#ENV TZ=Asia/Tehran
+
+CMD ["/newsbot"]
