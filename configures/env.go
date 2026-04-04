@@ -1,8 +1,8 @@
 package configures
 
 import (
+	"echoer_bot/tel_client_echoer"
 	"fmt"
-	"news_bot/tel_client_echoer"
 	"os"
 	"strconv"
 	"strings"

@@ -2,14 +2,14 @@ package echoer
 
 import (
 	"context"
+	"echoer_bot/lib/videokit"
+	"echoer_bot/matrix_bot"
+	"echoer_bot/system"
 	"fmt"
 	"io"
 	"log"
 	"mime"
 	"net/http"
-	"news_bot/lib/videokit"
-	"news_bot/matrix_bot"
-	"news_bot/system"
 	"os"
 	"path/filepath"
 	"sort"

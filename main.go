@@ -1,13 +1,13 @@
 package main
 
 import (
+	"echoer_bot/configures"
+	"echoer_bot/echoer"
+	"echoer_bot/matrix_bot"
+	"echoer_bot/system"
+	"echoer_bot/tel_bot"
+	"echoer_bot/tel_client_echoer"
 	"log"
-	"news_bot/configures"
-	"news_bot/echoer"
-	"news_bot/matrix_bot"
-	"news_bot/system"
-	"news_bot/tel_bot"
-	"news_bot/tel_client_echoer"
 	"sync"
 
 	"maunium.net/go/mautrix"

@@ -1,4 +1,4 @@
-module news_bot
+module echoer_bot
 
 go 1.25.0
 

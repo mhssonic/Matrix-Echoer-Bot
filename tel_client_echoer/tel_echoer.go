@@ -2,14 +2,14 @@ package tel_client_echoer
 
 import (
 	"context"
+	"echoer_bot/lib"
+	"echoer_bot/lib/videokit"
+	"echoer_bot/matrix_bot"
+	"echoer_bot/system"
 	"fmt"
 	"io"
 	"math"
 	"net/url"
-	"news_bot/lib"
-	"news_bot/lib/videokit"
-	"news_bot/matrix_bot"
-	"news_bot/system"
 	"os"
 	"path/filepath"
 	"slices"
