@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"io"
 	"log"
 	"mime"
 	"os"
@@ -19,6 +20,10 @@ import (
 
 type RoomAutoSender interface {
 	SendTextSync(ctx context.Context, text string) error
+	SendImageBytesWithHTMLCaptionSync(ctx context.Context, data []byte, mimeType, filename, rawCaption string) error
+	SendImageReaderSync(ctx context.Context, content io.Reader, contentLength int64, mimeType, filename, rawCaption string, width, height int) error
+	SendVideoReaderSync(ctx context.Context, content io.Reader, contentLength int64, mimeType, filename, rawCaption string) error
+	SendImageBytesWithHTMLCaptionAsync(data []byte, mimeType, filename, rawCaption string)
 	SimpleSendImageSync(ctx context.Context, filePath string, caption string) error
 	SendImageWithHTMLCaptionSync(ctx context.Context, filePath, rawCaption string) error
 	SendImageWithHTMLCaptionAsync(filePath, rawCaption string)
@@ -43,6 +48,10 @@ type roomAutoSenderImp struct {
 }
 
 type messageStruct struct {
+	kind       event.MessageType
+	data       []byte
+	mimeType   string
+	filename   string
 	filePath   string
 	rawCaption string
 }
@@ -53,6 +62,137 @@ func (r *roomAutoSenderImp) SendTextSync(ctx context.Context, text string) error
 	_, err := r.client.SendText(ctx, r.roomId, text)
 
 	return err
+}
+
+func (r *roomAutoSenderImp) SendImageBytesWithHTMLCaptionSync(ctx context.Context, data []byte, mimeType, filename, rawCaption string) error {
+	if mimeType == "" {
+		mimeType = "image/jpeg"
+	}
+	if filename == "" {
+		filename = "image"
+	}
+
+	mxc, err := r.client.UploadBytes(ctx, data, mimeType)
+	if err != nil {
+		return fmt.Errorf("upload image: %w", err)
+	}
+
+	img, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		img = image.Config{Width: 0, Height: 0}
+	}
+
+	content := &event.MessageEventContent{
+		MsgType:  event.MsgImage,
+		Body:     rawCaption,
+		FileName: filename,
+		URL:      mxc.ContentURI.CUString(),
+		Format:   event.FormatHTML,
+		Info: &event.FileInfo{
+			Width:    img.Width,
+			Height:   img.Height,
+			MimeType: mimeType,
+			Size:     len(data),
+		},
+	}
+
+	if rawCaption != "" {
+		content.FormattedBody = convertToMatrixHTML(rawCaption)
+		content.Body = rawCaption
+	} else {
+		content.Body = filename
+	}
+
+	_, err = r.client.SendMessageEvent(ctx, r.roomId, event.EventMessage, content)
+	if err != nil {
+		return fmt.Errorf("send image message: %w", err)
+	}
+	return nil
+}
+
+func (r *roomAutoSenderImp) SendImageReaderSync(ctx context.Context, content io.Reader, contentLength int64, mimeType, filename, rawCaption string, width, height int) error {
+	if mimeType == "" {
+		mimeType = "image/jpeg"
+	}
+	if filename == "" {
+		filename = "image"
+	}
+
+	//mxc, err := r.client.Upload(ctx, content, mimeType, contentLength)
+	mxc, err := r.client.UploadMedia(ctx, mautrix.ReqUploadMedia{
+		Content:       content,
+		ContentLength: contentLength,
+		ContentType:   mimeType,
+	})
+	if err != nil {
+		return fmt.Errorf("upload image: %w", err)
+	}
+
+	contentEvt := &event.MessageEventContent{
+		MsgType:  event.MsgImage,
+		Body:     rawCaption,
+		FileName: filename,
+		URL:      mxc.ContentURI.CUString(),
+		Format:   event.FormatHTML,
+		Info: &event.FileInfo{
+			Width:    width,
+			Height:   height,
+			MimeType: mimeType,
+			Size:     int(contentLength),
+		},
+	}
+
+	if rawCaption != "" {
+		contentEvt.FormattedBody = convertToMatrixHTML(rawCaption)
+		contentEvt.Body = rawCaption
+	} else {
+		contentEvt.Body = filename
+	}
+
+	_, err = r.client.SendMessageEvent(ctx, r.roomId, event.EventMessage, contentEvt)
+	if err != nil {
+		return fmt.Errorf("send image message: %w", err)
+	}
+	return nil
+}
+
+func (r *roomAutoSenderImp) SendVideoReaderSync(ctx context.Context, video io.Reader, videoLength int64, mimeType, filename, rawCaption string) error {
+	if mimeType == "" {
+		mimeType = "video/mp4"
+	}
+	if filename == "" {
+		filename = "video"
+	}
+
+	mxc, err := r.client.Upload(ctx, video, mimeType, videoLength)
+	if err != nil {
+		return fmt.Errorf("upload video: %w", err)
+	}
+
+	content := &event.MessageEventContent{
+		MsgType:  event.MsgVideo,
+		Body:     rawCaption,
+		FileName: filename,
+		URL:      mxc.ContentURI.CUString(),
+		Format:   event.FormatHTML,
+		Info: &event.FileInfo{
+			MimeType: mimeType,
+			Size:     int(videoLength),
+		},
+	}
+
+	if rawCaption != "" {
+		content.FormattedBody = convertToMatrixHTML(rawCaption)
+		content.Body = rawCaption
+	} else {
+		content.Body = filename
+	}
+
+	_, err = r.client.SendMessageEvent(ctx, r.roomId, event.EventMessage, content)
+	if err != nil {
+		return fmt.Errorf("send video message: %w", err)
+	}
+	return nil
 }
 
 // SimpleSendImageSync uploads a photo and sends it as an m.image message.
@@ -118,52 +258,7 @@ func (r *roomAutoSenderImp) SendImageWithHTMLCaptionSync(ctx context.Context, fi
 		mimeType = "image/jpeg"
 	}
 
-	// === 1. Upload the main image ===
-	mxc, err := r.client.UploadBytes(ctx, data, mimeType)
-	if err != nil {
-		return fmt.Errorf("upload image: %w", err)
-	}
-
-	// === 2. Get image dimensions ===
-	img, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		// fallback if decode fails
-		img = image.Config{Width: 800, Height: 600}
-	}
-
-	// === 3. Build rich content (exactly like client) ===
-	content := &event.MessageEventContent{
-		MsgType:  event.MsgImage,
-		Body:     rawCaption, // fallback text
-		FileName: filepath.Base(filePath),
-		URL:      mxc.ContentURI.CUString(), // the mxc:// URI
-		Format:   "org.matrix.custom.html",
-		Info: &event.FileInfo{
-			Width:    img.Width,
-			Height:   img.Height,
-			MimeType: mimeType,
-			Size:     len(data),
-			// Thumbnail can be added later if you want to generate one
-		},
-	}
-
-	// === 4. Convert caption to proper HTML (with <p> and <br />) ===
-	if rawCaption != "" {
-		htmlBody := convertToMatrixHTML(rawCaption)
-		content.FormattedBody = htmlBody
-		content.Body = rawCaption // plain text version
-	}
-
-	// Optional: Add blurhash (you can generate it with a library if needed)
-	// content.Info.Blurhash = "K27nLI~qMx4TV@IA00j?ay"  // example from your request
-
-	// === 5. Send the message ===
-	_, err = r.client.SendMessageEvent(ctx, r.roomId, event.EventMessage, content)
-	if err != nil {
-		return fmt.Errorf("send message: %w", err)
-	}
-
-	return nil
+	return r.SendImageBytesWithHTMLCaptionSync(ctx, data, mimeType, filepath.Base(filePath), rawCaption)
 }
 
 // SendImageWithHTMLCaptionAsync sends an image exactly like the official client (non-blocking) advised version
@@ -171,13 +266,29 @@ func (r *roomAutoSenderImp) SendImageWithHTMLCaptionAsync(filePath, rawCaption s
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	select {
-	case r.messageChannel <- &messageStruct{filePath, rawCaption}:
+	case r.messageChannel <- &messageStruct{filePath: filePath, rawCaption: rawCaption}:
 	case <-ticker.C:
 	}
 }
 
 func (r *roomAutoSenderImp) SendTextAsync(text string) {
+	fmt.Println("I'm sending text to the room")
 	r.SendImageWithHTMLCaptionAsync("", text)
+}
+
+func (r *roomAutoSenderImp) SendImageBytesWithHTMLCaptionAsync(data []byte, mimeType, filename, rawCaption string) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	select {
+	case r.messageChannel <- &messageStruct{
+		kind:       event.MsgImage,
+		data:       data,
+		mimeType:   mimeType,
+		filename:   filename,
+		rawCaption: rawCaption,
+	}:
+	case <-ticker.C:
+	}
 }
 
 func (r *roomAutoSenderImp) Start(workerCount int) {
@@ -193,7 +304,22 @@ func (r *roomAutoSenderImp) Stop() {
 
 func (r *roomAutoSenderImp) sender(ctx context.Context) {
 	for message := range r.messageChannel {
+		fmt.Println(message, len(message.data))
+		if len(message.data) > 0 {
+			switch message.kind {
+			case event.MsgImage:
+				err := r.SendImageBytesWithHTMLCaptionSync(ctx, message.data, message.mimeType, message.filename, message.rawCaption)
+				if err != nil {
+					log.Printf("Failed to send image: %v", err)
+				}
+			default:
+				log.Printf("Unknown media kind: %s", message.kind)
+			}
+			continue
+		}
+
 		if message.filePath == "" {
+			fmt.Println("send text for real")
 			err := r.SendTextSync(ctx, message.rawCaption)
 			if err != nil {
 				log.Printf("Failed to send text: %v", err)

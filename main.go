@@ -26,17 +26,24 @@ func main() {
 	}
 
 	matrixRoomAutoSender := matrix_bot.NewRoomAutoSender(client, conf.RoomID)
-	matrixRoomReader := matrix_bot.NewCodeReader(client, conf.CodeReaderRoomId)
-
-	telBot, err := tel_bot.NewTelegramBotWithProxy(conf.BotToken, conf.ProxyURL)
-	if err != nil {
-		log.Fatalf("Failed to create Telegram bot: %v", err)
+	var matrixRoomReader matrix_bot.CodeReader
+	if conf.CodeReaderRoomId != "" {
+		matrixRoomReader = matrix_bot.NewCodeReader(client, conf.CodeReaderRoomId)
 	}
 
 	matrixRoomAutoSender.Start(4)
-	echoerServices := []system.Echoer{
-		echoer.NewService(telBot, conf.ChannelBotChatId, matrixRoomAutoSender),
-		tel_client_echoer.NewService(conf.TelClientChannelChatIds, matrixRoomAutoSender, matrixRoomReader, conf.TelClientConfig),
+	echoerServices := []system.Echoer{}
+
+	if conf.BotToken != "" {
+		telBot, err := tel_bot.NewTelegramBotWithProxy(conf.BotToken, conf.ProxyURL)
+		if err != nil {
+			log.Fatalf("Failed to create Telegram bot: %v", err)
+		}
+		echoerServices = append(echoerServices, echoer.NewService(telBot, conf.ChannelBotChatId, matrixRoomAutoSender, conf.DisableVideos))
+	}
+
+	if conf.TelClientConfig.ApiCode != 0 && conf.TelClientConfig.ApiHash != "" && conf.TelClientConfig.PhoneNumber != "" {
+		echoerServices = append(echoerServices, tel_client_echoer.NewService(conf.TelClientChannelChatIds, matrixRoomAutoSender, matrixRoomReader, conf.TelClientConfig, conf.DisableVideos))
 	}
 
 	//fmt.Print(matrixRoomReader.ReadCode(context.Background(), nil))

@@ -20,6 +20,7 @@ type Config struct {
 	BotToken                string
 	ChannelBotChatId        int64
 	TelClientChannelChatIds []int64
+	DisableVideos           bool
 
 	// System configurations
 	ProxyURL string
@@ -84,6 +85,10 @@ func LoadConfig() (Config, error) {
 		Proxy:       getEnv("PROXY_URL"),
 	}
 
+	if v := strings.ToLower(getEnv("DISABLE_VIDEOS")); v != "" {
+		cfg.DisableVideos = v == "1" || v == "true" || v == "yes" || v == "on"
+	}
+
 	// Optional: TELEGRAM_API_ID
 	if apiCodeStr := getEnv("TELEGRAM_API_ID"); apiCodeStr != "" {
 		if code, err := strconv.Atoi(apiCodeStr); err == nil {
@@ -120,14 +125,25 @@ func (c *Config) validate() error {
 	if c.RoomID == "" {
 		return fmt.Errorf("MATRIX_ROOM_ID environment variable is required")
 	}
-	if c.CodeReaderRoomId == "" {
-		return fmt.Errorf("MATRIX_CODE_READER_ROOM_ID environment variable is required")
+
+	botEnabled := c.BotToken != ""
+	clientEnabled := c.TelClientConfig.ApiCode != 0 && c.TelClientConfig.ApiHash != "" && c.TelClientConfig.PhoneNumber != ""
+
+	if !botEnabled && !clientEnabled {
+		return fmt.Errorf("no sources enabled: provide TELEGRAM_BOT_TOKEN and/or TELEGRAM_API_ID + TELEGRAM_API_HASH + TELEGRAM_PHONE_NUMBER")
 	}
-	if c.BotToken == "" {
-		return fmt.Errorf("TELEGRAM_BOT_TOKEN environment variable is required")
+
+	if botEnabled && c.ChannelBotChatId == 0 {
+		return fmt.Errorf("TELEGRAM_BOT_CHANNEL_CHAT_ID is required when TELEGRAM_BOT_TOKEN is set")
 	}
-	if len(c.TelClientChannelChatIds) == 0 {
-		return fmt.Errorf("TELEGRAM_CHANNEL_CHAT_ID or TELEGRAM_CLIENT_CHANNEL_CHAT_IDS environment variable is required")
+
+	if clientEnabled {
+		if c.CodeReaderRoomId == "" {
+			return fmt.Errorf("MATRIX_CODE_READER_ROOM_ID is required when Telegram client is enabled")
+		}
+		if len(c.TelClientChannelChatIds) == 0 {
+			return fmt.Errorf("TELEGRAM_CLIENT_CHANNEL_CHAT_IDS is required when Telegram client is enabled")
+		}
 	}
 
 	return nil

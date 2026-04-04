@@ -3,12 +3,18 @@ package tel_client_echoer
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"news_bot/lib"
+	"news_bot/lib/videokit"
 	"news_bot/matrix_bot"
 	"news_bot/system"
 	"os"
+	"path/filepath"
 	"slices"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/session"
@@ -35,14 +41,23 @@ type tellClientEchoer struct {
 	matrixSender   matrix_bot.RoomAutoSender
 	matrixReader   matrix_bot.CodeReader
 	config         Config
+	disableVideos  bool
+
+	mu            sync.Mutex
+	tgClient      *telegram.Client
+	albumBuffer   map[int64][]*tg.Message
+	albumDeadline map[int64]*time.Timer
 }
 
-func NewService(tellChannelId []int64, matrixSender matrix_bot.RoomAutoSender, reader matrix_bot.CodeReader, config Config) system.Echoer {
+func NewService(tellChannelId []int64, matrixSender matrix_bot.RoomAutoSender, reader matrix_bot.CodeReader, config Config, disableVideos bool) system.Echoer {
 	return &tellClientEchoer{
 		tellChannelIds: tellChannelId,
 		matrixSender:   matrixSender,
 		matrixReader:   reader,
 		config:         config,
+		disableVideos:  disableVideos,
+		albumBuffer:    map[int64][]*tg.Message{},
+		albumDeadline:  map[int64]*time.Timer{},
 	}
 }
 func (t *tellClientEchoer) Start() {
@@ -105,17 +120,22 @@ func (t *tellClientEchoer) Start() {
 		Resolver:       resolver,
 		SessionStorage: sessionStorage,
 	})
+	t.tgClient = client
 
 	// Message handler
 	d.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewChannelMessage) error {
 		msg, ok := update.Message.(*tg.Message)
-		if !ok || msg.Message == "" {
+		if !ok {
 			return nil
 		}
 
 		if peerCh, ok := msg.PeerID.(*tg.PeerChannel); ok {
 			if len(t.tellChannelIds) == 0 || slices.Contains(t.tellChannelIds, peerCh.ChannelID) {
-				t.matrixSender.SendTextAsync(msg.Message)
+				if msg.GroupedID != 0 && msg.Media != nil {
+					t.enqueueAlbum(msg.GroupedID, msg)
+					return nil
+				}
+				return t.processMessage(ctx, client, msg)
 			}
 		}
 		return nil
@@ -159,4 +179,233 @@ func (t *tellClientEchoer) Start() {
 		}
 		break // successful run (only exits on Ctrl+C)
 	}
+}
+
+func (t *tellClientEchoer) enqueueAlbum(groupID int64, msg *tg.Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.albumBuffer[groupID] = append(t.albumBuffer[groupID], msg)
+	if _, ok := t.albumDeadline[groupID]; ok {
+		return
+	}
+	t.albumDeadline[groupID] = time.AfterFunc(1200*time.Millisecond, func() {
+		t.flushAlbum(groupID)
+	})
+}
+
+func (t *tellClientEchoer) flushAlbum(groupID int64) {
+	t.mu.Lock()
+	msgs := t.albumBuffer[groupID]
+	timer := t.albumDeadline[groupID]
+	delete(t.albumBuffer, groupID)
+	delete(t.albumDeadline, groupID)
+	client := t.tgClient
+	t.mu.Unlock()
+
+	if timer != nil {
+		timer.Stop()
+	}
+	if len(msgs) == 0 {
+		return
+	}
+
+	sort.Slice(msgs, func(i, j int) bool { return msgs[i].ID < msgs[j].ID })
+
+	albumCaption := ""
+	for _, m := range msgs {
+		if strings.TrimSpace(m.Message) != "" {
+			albumCaption = m.Message
+			break
+		}
+	}
+
+	captionOnID := 0
+	for _, m := range msgs {
+		if _, ok := m.Media.(*tg.MessageMediaPhoto); ok {
+			captionOnID = m.ID
+		}
+	}
+	if captionOnID == 0 {
+		for _, m := range msgs {
+			if isAlbumVideoMessage(m) {
+				captionOnID = m.ID
+			}
+		}
+	}
+
+	for _, m := range msgs {
+		cap := ""
+		if m.ID == captionOnID {
+			cap = albumCaption
+		}
+		mCopy := *m
+		mCopy.Message = cap
+		_ = t.processMessage(context.Background(), client, &mCopy)
+	}
+}
+
+func (t *tellClientEchoer) processMessage(ctx context.Context, client *telegram.Client, msg *tg.Message) error {
+	if msg.Message != "" && msg.Media == nil {
+		t.matrixSender.SendTextAsync(msg.Message)
+		return nil
+	}
+
+	caption := msg.Message
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		if client == nil || media.Photo == nil {
+			return nil
+		}
+		photo, ok := media.Photo.(*tg.Photo)
+		if !ok {
+			return nil
+		}
+		sizeType, w, h, fileSize := pickLargestPhotoSizeMeta(photo.Sizes)
+		loc := &tg.InputPhotoFileLocation{
+			ID:            photo.ID,
+			AccessHash:    photo.AccessHash,
+			FileReference: photo.FileReference,
+			ThumbSize:     sizeType,
+		}
+		pr, pw := io.Pipe()
+		go func() {
+			_, err := client.Download(loc).Stream(ctx, pw)
+			_ = pw.CloseWithError(err)
+		}()
+
+		return t.matrixSender.SendImageReaderSync(ctx, pr, int64(fileSize), "image/jpeg", fmt.Sprintf("photo_%d.jpg", msg.ID), caption, w, h)
+	case *tg.MessageMediaDocument:
+		if client == nil || media.Document == nil {
+			return nil
+		}
+		doc, ok := media.Document.(*tg.Document)
+		if !ok {
+			return nil
+		}
+		if t.disableVideos && isVideoDocument(doc) {
+			return nil
+		}
+		if isVideoDocument(doc) {
+			return t.handleTelegramClientVideo(ctx, client, doc, caption)
+		}
+		// for now: ignore non-video documents
+		return nil
+	default:
+		// unsupported
+	}
+
+	return nil
+}
+
+func isAlbumVideoMessage(msg *tg.Message) bool {
+	docMedia, ok := msg.Media.(*tg.MessageMediaDocument)
+	if !ok || docMedia.Document == nil {
+		return false
+	}
+	doc, ok := docMedia.Document.(*tg.Document)
+	if !ok {
+		return false
+	}
+	return isVideoDocument(doc)
+}
+
+func (t *tellClientEchoer) handleTelegramClientVideo(ctx context.Context, client *telegram.Client, doc *tg.Document, caption string) error {
+	loc := &tg.InputDocumentFileLocation{
+		ID:            doc.ID,
+		AccessHash:    doc.AccessHash,
+		FileReference: doc.FileReference,
+		ThumbSize:     "",
+	}
+
+	f, err := os.CreateTemp("", "tgcli-vid-*")
+	if err != nil {
+		return err
+	}
+	tmpName := f.Name()
+	_ = f.Close()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := client.Download(loc).ToPath(ctx, tmpName); err != nil {
+		return err
+	}
+
+	uploadPath, uploadSz, cleanupOut, ok, err := videokit.PrepareForMatrix(ctx, tmpName)
+	if err != nil {
+		if strings.TrimSpace(caption) != "" {
+			_ = t.matrixSender.SendTextSync(ctx, caption)
+		}
+		return nil
+	}
+	if !ok {
+		if strings.TrimSpace(caption) != "" {
+			_ = t.matrixSender.SendTextSync(ctx, caption)
+		}
+		return nil
+	}
+	defer cleanupOut()
+
+	rf, err := os.Open(uploadPath)
+	if err != nil {
+		return err
+	}
+	defer rf.Close()
+
+	filename := documentFilename(doc)
+	if filepath.Ext(filename) == "" {
+		filename += ".mp4"
+	}
+	outName := filename
+	if filepath.Ext(uploadPath) == ".mp4" {
+		base := strings.TrimSuffix(filename, filepath.Ext(filename))
+		if base == "" {
+			base = "video"
+		}
+		outName = base + ".mp4"
+	}
+	mimeType := doc.MimeType
+	if filepath.Ext(uploadPath) == ".mp4" {
+		mimeType = "video/mp4"
+	}
+	if mimeType == "" {
+		mimeType = "video/mp4"
+	}
+	return t.matrixSender.SendVideoReaderSync(ctx, rf, uploadSz, mimeType, outName, caption)
+}
+
+func pickLargestPhotoSizeMeta(sizes []tg.PhotoSizeClass) (typ string, w int, h int, size int) {
+	bestType := "w"
+	bestArea := 0
+	bestW, bestH, bestSize := 0, 0, 0
+	for _, s := range sizes {
+		ps, ok := s.(*tg.PhotoSize)
+		if !ok {
+			continue
+		}
+		area := ps.W * ps.H
+		if area > bestArea {
+			bestArea = area
+			bestType = ps.Type
+			bestW, bestH, bestSize = ps.W, ps.H, ps.Size
+		}
+	}
+	return bestType, bestW, bestH, bestSize
+}
+
+func isVideoDocument(doc *tg.Document) bool {
+	for _, a := range doc.Attributes {
+		if _, ok := a.(*tg.DocumentAttributeVideo); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func documentFilename(doc *tg.Document) string {
+	for _, a := range doc.Attributes {
+		if f, ok := a.(*tg.DocumentAttributeFilename); ok && f.FileName != "" {
+			return filepath.Base(f.FileName)
+		}
+	}
+	return fmt.Sprintf("file_%d", doc.ID)
 }
