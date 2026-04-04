@@ -11,6 +11,9 @@ import (
 // MaxMatrixVideoBytes is the maximum video size allowed for upload (after optional compression).
 const MaxMatrixVideoBytes int64 = 5 << 20
 
+// MaxMatrixUploadBytes is the maximum size for any single media upload to Matrix (image, video, file).
+const MaxMatrixUploadBytes int64 = 30 << 20
+
 // FFmpegExecutable returns FFMPEG_PATH if set, otherwise "ffmpeg".
 func FFmpegExecutable() string {
 	if p := os.Getenv("FFMPEG_PATH"); p != "" {
@@ -53,7 +56,7 @@ func PrepareForMatrix(ctx context.Context, inputPath string) (uploadPath string,
 	sz := st.Size()
 	noop := func() {}
 
-	if sz <= MaxMatrixVideoBytes {
+	if sz <= MaxMatrixVideoBytes/2 {
 		return inputPath, sz, noop, true, nil
 	}
 

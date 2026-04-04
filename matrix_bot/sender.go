@@ -22,7 +22,7 @@ type RoomAutoSender interface {
 	SendTextSync(ctx context.Context, text string) error
 	SendImageBytesWithHTMLCaptionSync(ctx context.Context, data []byte, mimeType, filename, rawCaption string) error
 	SendImageReaderSync(ctx context.Context, content io.Reader, contentLength int64, mimeType, filename, rawCaption string, width, height int) error
-	SendVideoReaderSync(ctx context.Context, content io.Reader, contentLength int64, mimeType, filename, rawCaption string) error
+	SendVideoReaderSync(ctx context.Context, content io.Reader, contentLength int64, mimeType, filename, rawCaption string, width, height, durationMS int) error
 	SendImageBytesWithHTMLCaptionAsync(data []byte, mimeType, filename, rawCaption string)
 	SimpleSendImageSync(ctx context.Context, filePath string, caption string) error
 	SendImageWithHTMLCaptionSync(ctx context.Context, filePath, rawCaption string) error
@@ -156,7 +156,7 @@ func (r *roomAutoSenderImp) SendImageReaderSync(ctx context.Context, content io.
 	return nil
 }
 
-func (r *roomAutoSenderImp) SendVideoReaderSync(ctx context.Context, video io.Reader, videoLength int64, mimeType, filename, rawCaption string) error {
+func (r *roomAutoSenderImp) SendVideoReaderSync(ctx context.Context, video io.Reader, videoLength int64, mimeType, filename, rawCaption string, width, height, durationMS int) error {
 	if mimeType == "" {
 		mimeType = "video/mp4"
 	}
@@ -176,6 +176,9 @@ func (r *roomAutoSenderImp) SendVideoReaderSync(ctx context.Context, video io.Re
 		URL:      mxc.ContentURI.CUString(),
 		Format:   event.FormatHTML,
 		Info: &event.FileInfo{
+			Width:    width,
+			Height:   height,
+			Duration: durationMS,
 			MimeType: mimeType,
 			Size:     int(videoLength),
 		},
@@ -272,7 +275,6 @@ func (r *roomAutoSenderImp) SendImageWithHTMLCaptionAsync(filePath, rawCaption s
 }
 
 func (r *roomAutoSenderImp) SendTextAsync(text string) {
-	fmt.Println("I'm sending text to the room")
 	r.SendImageWithHTMLCaptionAsync("", text)
 }
 
@@ -304,7 +306,6 @@ func (r *roomAutoSenderImp) Stop() {
 
 func (r *roomAutoSenderImp) sender(ctx context.Context) {
 	for message := range r.messageChannel {
-		fmt.Println(message, len(message.data))
 		if len(message.data) > 0 {
 			switch message.kind {
 			case event.MsgImage:
@@ -319,7 +320,6 @@ func (r *roomAutoSenderImp) sender(ctx context.Context) {
 		}
 
 		if message.filePath == "" {
-			fmt.Println("send text for real")
 			err := r.SendTextSync(ctx, message.rawCaption)
 			if err != nil {
 				log.Printf("Failed to send text: %v", err)

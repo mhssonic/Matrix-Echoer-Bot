@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"news_bot/lib"
 	"news_bot/lib/videokit"
@@ -262,6 +263,12 @@ func (t *tellClientEchoer) processMessage(ctx context.Context, client *telegram.
 			return nil
 		}
 		sizeType, w, h, fileSize := pickLargestPhotoSizeMeta(photo.Sizes)
+		if int64(fileSize) > videokit.MaxMatrixUploadBytes {
+			if strings.TrimSpace(caption) != "" {
+				_ = t.matrixSender.SendTextSync(ctx, caption)
+			}
+			return nil
+		}
 		loc := &tg.InputPhotoFileLocation{
 			ID:            photo.ID,
 			AccessHash:    photo.AccessHash,
@@ -311,6 +318,8 @@ func isAlbumVideoMessage(msg *tg.Message) bool {
 }
 
 func (t *tellClientEchoer) handleTelegramClientVideo(ctx context.Context, client *telegram.Client, doc *tg.Document, caption string) error {
+	videoW, videoH, durationMS := documentVideoMeta(doc)
+
 	loc := &tg.InputDocumentFileLocation{
 		ID:            doc.ID,
 		AccessHash:    doc.AccessHash,
@@ -345,6 +354,13 @@ func (t *tellClientEchoer) handleTelegramClientVideo(ctx context.Context, client
 	}
 	defer cleanupOut()
 
+	if uploadSz > videokit.MaxMatrixUploadBytes {
+		if strings.TrimSpace(caption) != "" {
+			_ = t.matrixSender.SendTextSync(ctx, caption)
+		}
+		return nil
+	}
+
 	rf, err := os.Open(uploadPath)
 	if err != nil {
 		return err
@@ -370,7 +386,17 @@ func (t *tellClientEchoer) handleTelegramClientVideo(ctx context.Context, client
 	if mimeType == "" {
 		mimeType = "video/mp4"
 	}
-	return t.matrixSender.SendVideoReaderSync(ctx, rf, uploadSz, mimeType, outName, caption)
+	return t.matrixSender.SendVideoReaderSync(ctx, rf, uploadSz, mimeType, outName, caption, videoW, videoH, durationMS)
+}
+
+// documentVideoMeta reads width, height, and duration for Matrix (duration in milliseconds).
+func documentVideoMeta(doc *tg.Document) (width, height, durationMS int) {
+	for _, attr := range doc.Attributes {
+		if v, ok := attr.(*tg.DocumentAttributeVideo); ok {
+			return v.W, v.H, int(math.Round(v.Duration * 1000))
+		}
+	}
+	return 0, 0, 0
 }
 
 func pickLargestPhotoSizeMeta(sizes []tg.PhotoSizeClass) (typ string, w int, h int, size int) {

@@ -184,14 +184,33 @@ func (t *telChannelEchoerImp) handlePhoto(msg *tgbotapi.Message, caption string)
 
 	photo := msg.Photo[len(msg.Photo)-1] // best quality
 
+	ctx := context.Background()
+	gf, err := t.telBot.GetFile(tgbotapi.FileConfig{FileID: photo.FileID})
+	if err != nil {
+		return fmt.Errorf("getFile: %w", err)
+	}
+	if gf.FileSize > 0 && int64(gf.FileSize) > videokit.MaxMatrixUploadBytes {
+		if caption != "" {
+			_ = t.matrixSender.SendTextSync(ctx, caption)
+		}
+		return nil
+	}
+
 	rc, contentLength, mimeType, filename, err := t.openFileStream(photo.FileID, "image/jpeg", "photo.jpg")
 	if err != nil {
 		return fmt.Errorf("open photo stream failed: %w", err)
 	}
 	defer rc.Close()
 
+	if contentLength > 0 && contentLength > videokit.MaxMatrixUploadBytes {
+		if caption != "" {
+			_ = t.matrixSender.SendTextSync(ctx, caption)
+		}
+		return nil
+	}
+
 	return t.matrixSender.SendImageReaderSync(
-		context.Background(),
+		ctx,
 		rc,
 		contentLength,
 		mimeType,
@@ -227,13 +246,21 @@ func (t *telChannelEchoerImp) handleVideo(msg *tgbotapi.Message, caption string)
 	}
 	knownSize := int64(file.FileSize)
 
+	durationMS := video.Duration * 1000
+
 	if knownSize > 0 && knownSize <= videokit.MaxMatrixVideoBytes {
 		rc, contentLength, mt, fn, err := t.openFileStream(video.FileID, mimeType, filename)
 		if err != nil {
 			return fmt.Errorf("open video stream failed: %w", err)
 		}
 		defer rc.Close()
-		return t.matrixSender.SendVideoReaderSync(ctx, rc, contentLength, mt, fn, caption)
+		if contentLength > 0 && contentLength > videokit.MaxMatrixUploadBytes {
+			if caption != "" {
+				_ = t.matrixSender.SendTextSync(ctx, caption)
+			}
+			return nil
+		}
+		return t.matrixSender.SendVideoReaderSync(ctx, rc, contentLength, mt, fn, caption, video.Width, video.Height, durationMS)
 	}
 
 	tmpPath, _, cleanupTmp, err := t.downloadTelegramFileToTemp(video.FileID, "tgvid-*")
@@ -258,6 +285,13 @@ func (t *telChannelEchoerImp) handleVideo(msg *tgbotapi.Message, caption string)
 	}
 	defer cleanupOut()
 
+	if uploadSize > videokit.MaxMatrixUploadBytes {
+		if caption != "" {
+			_ = t.matrixSender.SendTextSync(ctx, caption)
+		}
+		return nil
+	}
+
 	f, err := os.Open(uploadPath)
 	if err != nil {
 		return err
@@ -272,7 +306,7 @@ func (t *telChannelEchoerImp) handleVideo(msg *tgbotapi.Message, caption string)
 		}
 		outName = base + ".mp4"
 	}
-	return t.matrixSender.SendVideoReaderSync(ctx, f, uploadSize, "video/mp4", outName, caption)
+	return t.matrixSender.SendVideoReaderSync(ctx, f, uploadSize, "video/mp4", outName, caption, video.Width, video.Height, durationMS)
 }
 
 // openFileStream resolves the file with getFile, then streams the body from Telegram (bot HTTP client).
