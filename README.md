@@ -1,6 +1,6 @@
-# news_bot
+# Echoer_Bot
 
-`news_bot` is a small Go service that **listens to Telegram sources** (a **Bot API** channel listener and/or a **user (MTProto) client**) and **echoes** new posts into a **Matrix** room as text and media messages.
+`Echoer_Bot` is a small Go service that **listens to Telegram sources** (a **Bot API** channel listener and/or a **user (MTProto) client**) and **echoes** new posts into a **Matrix** room as text and media messages.
 
 Matrix sending is implemented with [mautrix](https://github.com/mautrix/go). Telegram uses [go-telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api) for the bot and [gotd](https://github.com/gotd/td) for the user client.
 
@@ -64,8 +64,8 @@ go run .
 Or build a binary:
 
 ```bash
-go build -o news_bot .
-./news_bot
+go build -o echoer_bot .
+./echoer_bot
 ```
 
 On first run, the **user client** stores session data under `./data/telegram_session.json` (directory is created if needed).
