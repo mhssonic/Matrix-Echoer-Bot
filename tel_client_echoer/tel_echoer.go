@@ -368,7 +368,8 @@ func (t *tellClientEchoer) handleTelegramClientVideo(ctx context.Context, client
 	defer rf.Close()
 
 	filename := documentFilename(doc)
-	if filepath.Ext(filename) == "" {
+	// TODO handle all formats
+	if ext := filepath.Ext(filename); ext == "" || (ext != ".mp4" && doc.MimeType == "video/mp4") {
 		filename += ".mp4"
 	}
 	outName := filename
