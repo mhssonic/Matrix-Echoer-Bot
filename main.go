@@ -10,8 +10,6 @@ import (
 	"echoer_bot/system"
 	"echoer_bot/tel_bot"
 	"echoer_bot/tel_client_echoer"
-	"log"
-	"sync"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/id"
