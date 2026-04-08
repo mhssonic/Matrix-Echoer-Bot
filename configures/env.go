@@ -8,13 +8,17 @@ import (
 	"strings"
 )
 
-// Config holds all application configuration
-type Config struct {
-	// Matrix configurations
+// MatrixDestination is one Matrix account + target room (may be on a different server than others).
+type MatrixDestination struct {
 	Homeserver        string
 	UserID            string
 	MatrixAccessToken string
 	RoomID            string
+}
+
+// Config holds all application configuration
+type Config struct {
+	MatrixDestinations []MatrixDestination
 
 	// Telegram bot configurations
 	BotToken                string
@@ -34,11 +38,9 @@ type Config struct {
 func LoadConfig() (Config, error) {
 	cfg := Config{}
 
-	// Matrix configurations
-	cfg.Homeserver = getEnv("MATRIX_HOMESERVER")
-	cfg.UserID = getEnv("MATRIX_USER_ID")
-	cfg.MatrixAccessToken = getEnv("MATRIX_ACCESS_TOKEN")
-	cfg.RoomID = getEnv("MATRIX_ROOM_ID")
+	if err := cfg.loadMatrixDestinations(); err != nil {
+		return cfg, err
+	}
 
 	cfg.CodeReaderRoomId = getEnv("MATRIX_CODE_READER_ROOM_ID")
 
@@ -106,6 +108,57 @@ func LoadConfig() (Config, error) {
 	return cfg, nil
 }
 
+func (c *Config) loadMatrixDestinations() error {
+	multiHS := splitCommaList(getEnv("MATRIX_HOMESERVERS"))
+	multiUID := splitCommaList(getEnv("MATRIX_USER_IDS"))
+	multiTok := splitCommaList(getEnv("MATRIX_ACCESS_TOKENS"))
+	multiRoom := splitCommaList(getEnv("MATRIX_ROOM_IDS"))
+
+	useMulti := len(multiHS) > 0 || len(multiUID) > 0 || len(multiTok) > 0 || len(multiRoom) > 0
+	if useMulti {
+		n := len(multiHS)
+		if n == 0 || n != len(multiUID) || n != len(multiTok) || n != len(multiRoom) {
+			return fmt.Errorf("MATRIX_HOMESERVERS, MATRIX_USER_IDS, MATRIX_ACCESS_TOKENS, MATRIX_ROOM_IDS must all be non-empty comma-separated lists of the same length")
+		}
+		for i := 0; i < n; i++ {
+			c.MatrixDestinations = append(c.MatrixDestinations, MatrixDestination{
+				Homeserver:        multiHS[i],
+				UserID:            multiUID[i],
+				MatrixAccessToken: multiTok[i],
+				RoomID:            multiRoom[i],
+			})
+		}
+		return nil
+	}
+
+	hs := getEnv("MATRIX_HOMESERVER")
+	uid := getEnv("MATRIX_USER_ID")
+	tok := getEnv("MATRIX_ACCESS_TOKEN")
+	room := getEnv("MATRIX_ROOM_ID")
+	if hs == "" || uid == "" || tok == "" || room == "" {
+		return fmt.Errorf("set either legacy MATRIX_HOMESERVER, MATRIX_USER_ID, MATRIX_ACCESS_TOKEN, MATRIX_ROOM_ID or multi MATRIX_HOMESERVERS, MATRIX_USER_IDS, MATRIX_ACCESS_TOKENS, MATRIX_ROOM_IDS")
+	}
+	c.MatrixDestinations = []MatrixDestination{{
+		Homeserver:        hs,
+		UserID:            uid,
+		MatrixAccessToken: tok,
+		RoomID:            room,
+	}}
+	return nil
+}
+
+func splitCommaList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // getEnv reads an environment variable. Returns empty string if not set.
 func getEnv(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
@@ -113,17 +166,8 @@ func getEnv(key string) string {
 
 // validate checks that all required fields are present
 func (c *Config) validate() error {
-	if c.Homeserver == "" {
-		return fmt.Errorf("MATRIX_HOMESERVER environment variable is required")
-	}
-	if c.UserID == "" {
-		return fmt.Errorf("MATRIX_USER_ID environment variable is required")
-	}
-	if c.MatrixAccessToken == "" {
-		return fmt.Errorf("MATRIX_ACCESS_TOKEN environment variable is required")
-	}
-	if c.RoomID == "" {
-		return fmt.Errorf("MATRIX_ROOM_ID environment variable is required")
+	if len(c.MatrixDestinations) == 0 {
+		return fmt.Errorf("no Matrix destinations configured")
 	}
 
 	botEnabled := c.BotToken != ""

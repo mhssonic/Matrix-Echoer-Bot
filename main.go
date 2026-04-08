@@ -1,6 +1,9 @@
 package main
 
 import (
+	"log"
+	"sync"
+
 	"echoer_bot/configures"
 	"echoer_bot/echoer"
 	"echoer_bot/matrix_bot"
@@ -20,15 +23,28 @@ func main() {
 		log.Fatal(err)
 	}
 
-	client, err := mautrix.NewClient(conf.Homeserver, id.UserID(conf.UserID), conf.MatrixAccessToken)
-	if err != nil {
-		log.Fatalf("Failed to create Matrix client: %v", err)
+	clients := make([]*mautrix.Client, 0, len(conf.MatrixDestinations))
+	for _, d := range conf.MatrixDestinations {
+		c, err := mautrix.NewClient(d.Homeserver, id.UserID(d.UserID), d.MatrixAccessToken)
+		if err != nil {
+			log.Fatalf("Failed to create Matrix client: %v", err)
+		}
+		clients = append(clients, c)
 	}
 
-	matrixRoomAutoSender := matrix_bot.NewRoomAutoSender(client, conf.RoomID)
+	senders := make([]matrix_bot.RoomAutoSender, 0, len(conf.MatrixDestinations))
+	for i, d := range conf.MatrixDestinations {
+		senders = append(senders, matrix_bot.NewRoomAutoSender(clients[i], d.RoomID))
+	}
+
+	matrixRoomAutoSender, err := matrix_bot.NewMultiRoomAutoSender(senders)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	var matrixRoomReader matrix_bot.CodeReader
 	if conf.CodeReaderRoomId != "" {
-		matrixRoomReader = matrix_bot.NewCodeReader(client, conf.CodeReaderRoomId)
+		matrixRoomReader = matrix_bot.NewCodeReader(clients[0], conf.CodeReaderRoomId)
 	}
 
 	matrixRoomAutoSender.Start(4)
@@ -46,11 +62,8 @@ func main() {
 		echoerServices = append(echoerServices, tel_client_echoer.NewService(conf.TelClientChannelChatIds, matrixRoomAutoSender, matrixRoomReader, conf.TelClientConfig, conf.DisableVideos))
 	}
 
-	//fmt.Print(matrixRoomReader.ReadCode(context.Background(), nil))
-
 	wg := sync.WaitGroup{}
 	for _, service := range echoerServices {
-		//for _, _ = range echoerServices {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
