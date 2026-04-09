@@ -1,0 +1,81 @@
+name: Build Multi-Platform
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  # Optional: trigger on release creation if you want to build & attach binaries automatically
+  # release:
+  #   types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build for ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux - AMD64 (64-bit x86), 386 (32-bit x86), ARM64 (64-bit ARM), ARM (32-bit ARM)
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: 386
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: arm     # 32-bit ARM (works for Raspberry Pi, etc.)
+
+          # Windows - AMD64 (64-bit), 386 (32-bit), ARM64 (64-bit ARM)
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: 386
+          - goos: windows
+            goarch: arm64
+
+          # macOS (Darwin) - AMD64 (Intel 64-bit), ARM64 (Apple Silicon 64-bit)
+          # Note: macOS no longer supports 32-bit builds
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable   # or pin to e.g. '1.23' if you prefer
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0        # Static binary (recommended for cross-compilation)
+        run: |
+          # Create output directory
+          mkdir -p build
+
+          # Build binary name (e.g. myproject-linux-amd64 or myproject-windows-amd64.exe)
+          BINARY_NAME="myproject-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME="${BINARY_NAME}.exe"
+          fi
+
+          go build -ldflags="-s -w" -o "build/${BINARY_NAME}" echoer_bot
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: myproject-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: build/*
+          if-no-files-found: error
+          retention-days: 30
