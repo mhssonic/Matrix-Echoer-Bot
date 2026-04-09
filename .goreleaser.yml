@@ -1,0 +1,42 @@
+version: 2
+
+project_name: echoer_bot
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - 386
+      - arm64
+      - arm
+    ignore:
+      - goos: darwin
+        goarch: 386     # macOS doesn't support 32-bit anymore
+      - goos: darwin
+        goarch: arm     # macOS doesn't support 32-bit ARM
+    ldflags:
+      - -s -w
+    binary: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+
+archives:
+  - format: tar.gz
+    wrap_in_directory: false
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
