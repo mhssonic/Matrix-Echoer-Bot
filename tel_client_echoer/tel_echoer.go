@@ -186,6 +186,8 @@ func (t *tellClientEchoer) enqueueAlbum(groupID int64, msg *tg.Message) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// TODO fix conflict of multi groups
+
 	t.albumBuffer[groupID] = append(t.albumBuffer[groupID], msg)
 	if _, ok := t.albumDeadline[groupID]; ok {
 		return

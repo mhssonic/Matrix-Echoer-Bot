@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -264,14 +263,9 @@ func (r *roomAutoSenderImp) SendImageWithHTMLCaptionSync(ctx context.Context, fi
 	return r.SendImageBytesWithHTMLCaptionSync(ctx, data, mimeType, filepath.Base(filePath), rawCaption)
 }
 
-// SendImageWithHTMLCaptionAsync sends an image exactly like the official client (non-blocking) advised version
+// SendImageWithHTMLCaptionAsync queues work on the worker pool (blocks if the buffer is full).
 func (r *roomAutoSenderImp) SendImageWithHTMLCaptionAsync(filePath, rawCaption string) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	select {
-	case r.messageChannel <- &messageStruct{filePath: filePath, rawCaption: rawCaption}:
-	case <-ticker.C:
-	}
+	r.messageChannel <- &messageStruct{filePath: filePath, rawCaption: rawCaption}
 }
 
 func (r *roomAutoSenderImp) SendTextAsync(text string) {
@@ -279,17 +273,13 @@ func (r *roomAutoSenderImp) SendTextAsync(text string) {
 }
 
 func (r *roomAutoSenderImp) SendImageBytesWithHTMLCaptionAsync(data []byte, mimeType, filename, rawCaption string) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	select {
-	case r.messageChannel <- &messageStruct{
+	cp := append([]byte(nil), data...)
+	r.messageChannel <- &messageStruct{
 		kind:       event.MsgImage,
-		data:       data,
+		data:       cp,
 		mimeType:   mimeType,
 		filename:   filename,
 		rawCaption: rawCaption,
-	}:
-	case <-ticker.C:
 	}
 }
 
@@ -319,16 +309,17 @@ func (r *roomAutoSenderImp) sender(ctx context.Context) {
 			continue
 		}
 
-		if message.filePath == "" {
-			err := r.SendTextSync(ctx, message.rawCaption)
-			if err != nil {
-				log.Printf("Failed to send text: %v", err)
-			}
-		} else if message.rawCaption != "" {
+		if message.filePath != "" {
 			err := r.SendImageWithHTMLCaptionSync(ctx, message.filePath, message.rawCaption)
 			if err != nil {
 				log.Printf("Failed to send image: %v", err)
 			}
+			continue
+		}
+
+		err := r.SendTextSync(ctx, message.rawCaption)
+		if err != nil {
+			log.Printf("Failed to send text: %v", err)
 		}
 	}
 }
